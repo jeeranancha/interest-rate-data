@@ -28,19 +28,23 @@ selected_date = st.sidebar.date_input("EFFECTIVE_DATE", datetime.today().date())
 fetch_btn = st.sidebar.button("Fetch Data", type="primary")
 
 # --- BOT FETCH FUNCTION ---
-def fetch_bot_data(token_input, api_info, target_date):
+def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
+    """
+    Returns (date_str, float_rate) on success, or Exception on failure.
+    debug_capture: if a dict is passed in, it will be populated with the raw
+    API response for display in the UI.
+    """
     path = api_info["path"]
     api_type = api_info["type"]
     base_url = "https://gateway.api.bot.or.th"
     auth_header = token_input if token_input.startswith("Bearer ") else f"Bearer {token_input}"
-    
+
     # AUTO-DECODE: Extract hidden Client ID from the Base64 token
     final_client_id = token_input
     try:
         decoded = json.loads(base64.b64decode(token_input + "==").decode('utf-8'))
         final_client_id = decoded.get('id', token_input)
-    except Exception as e:
-        logging.error(f"Token decode error: {str(e)}")
+    except Exception:
         pass
 
     headers = {
@@ -49,7 +53,8 @@ def fetch_bot_data(token_input, api_info, target_date):
         "accept": "application/json"
     }
 
-    # Iterate backwards using MAX_LOOKBACK
+    last_raw_response = None
+
     for i in range(MAX_LOOKBACK):
         check_date = target_date - timedelta(days=i)
         check_date_str = check_date.strftime("%Y-%m-%d")
@@ -57,27 +62,27 @@ def fetch_bot_data(token_input, api_info, target_date):
 
         try:
             resp = requests.get(url, headers=headers, timeout=15)
-            
-            # Critical: Stop immediately if credentials are wrong
+
             if resp.status_code in [401, 403]:
                 return Exception("Authentication Failed: Check your BOT API Token.")
-            
+
             resp.raise_for_status()
             res_json = resp.json()
+
+            # Always capture the latest non-empty response for debug display
+            last_raw_response = res_json
+
             result_block = res_json.get("result", {})
             data_field = result_block.get("data")
-            
+
             if not data_field:
                 continue
-                
-            rate = None
-            logging.error(f"[DEBUG] {api_type} data_field sample: {str(data_field)[:500]}")
 
-            # Case 1: Interbank / List-based (THOR_OIS)
-            # BOT API may use 'term', 'tenor', or 'type' for the field name,
-            # and 'O/N', 'ON', or 'Overnight' for the overnight value.
+            rate = None
+
+            # Case 1: Interbank list (THOR_OIS)
             if api_type == "interbank" and isinstance(data_field, list):
-                ON_KEYS = ("term", "tenor", "type", "period")
+                ON_KEYS   = ("term", "tenor", "type", "period")
                 ON_VALUES = {"O/N", "ON", "Overnight", "overnight", "o/n"}
                 RATE_KEYS = ("rate", "value", "avg_rate", "rate_value", "weighted_avg_rate")
                 for rec in data_field:
@@ -86,31 +91,34 @@ def fetch_bot_data(token_input, api_info, target_date):
                         rate = next((rec.get(k) for k in RATE_KEYS if rec.get(k) is not None), None)
                         if rate is not None:
                             break
-                # Fallback: if no O/N label found, try first record
+                # Fallback: grab first record if no O/N row matched
                 if rate is None and data_field:
-                    RATE_KEYS = ("rate", "value", "avg_rate", "rate_value", "weighted_avg_rate")
                     rate = next((data_field[0].get(k) for k in RATE_KEYS if data_field[0].get(k) is not None), None)
 
-            # Case 2: Policy / Dict-based (THB_DISCOUNTING)
+            # Case 2: Policy dict/list (THB_DISCOUNTING)
             elif api_type == "policy":
-                POLICY_RATE_KEYS = ("value", "rate", "policy_rate_percent", "rate_value",
-                                    "mid", "policy_rate", "interestRate", "interest_rate")
+                POLICY_RATE_KEYS = (
+                    "value", "rate", "policy_rate_percent", "rate_value",
+                    "mid", "policy_rate", "interestRate", "interest_rate"
+                )
                 if isinstance(data_field, dict):
                     rate = next((data_field.get(k) for k in POLICY_RATE_KEYS if data_field.get(k) is not None), None)
-                elif isinstance(data_field, list) and len(data_field) > 0:
+                elif isinstance(data_field, list) and data_field:
                     rate = next((data_field[0].get(k) for k in POLICY_RATE_KEYS if data_field[0].get(k) is not None), None)
 
             if rate is not None:
-                # Type conversion safety
                 try:
                     return (check_date_str, float(rate))
                 except (ValueError, TypeError):
-                    logging.error(f"Invalid rate format: {rate}")
                     continue
 
         except requests.exceptions.RequestException as e:
             logging.error(f"BOT Request Error: {str(e)}")
             continue
+
+    # Save raw response for caller to display
+    if debug_capture is not None and last_raw_response is not None:
+        debug_capture["raw"] = last_raw_response
 
     return Exception(f"No valid data found in last {MAX_LOOKBACK} days")
 
@@ -171,16 +179,18 @@ if fetch_btn:
             ]
 
             results = []
-            errors = []
+            errors = []      # list of (label, error_msg, debug_info)
 
             for curve, tenor, source, api_info in api_mappings:
                 if source == "BOT":
-                    res = fetch_bot_data(bot_token_input, api_info, request_date)
+                    debug_info = {}
+                    res = fetch_bot_data(bot_token_input, api_info, request_date, debug_capture=debug_info)
                 else:
+                    debug_info = {}
                     res = fetch_fred_data(fred_api_key, api_info, request_date)
 
                 if isinstance(res, Exception):
-                    errors.append(f"{curve} ({source}): {str(res)}")
+                    errors.append((f"{curve} ({source})", str(res), debug_info))
                     val_date, rate_val = "N/A", "N/A"
                 else:
                     val_date, rate_val = res
@@ -206,9 +216,12 @@ if fetch_btn:
 
             if errors:
                 st.warning("⚠️ Completed with some errors")
-                with st.expander("Details"):
-                    for e in errors:
-                        st.error(e)
+                with st.expander("🔴 Error Details (click to expand)", expanded=True):
+                    for label, msg, dbg in errors:
+                        st.error(f"{label}: {msg}")
+                        if dbg.get("raw"):
+                            st.markdown(f"**📡 Raw API response for `{label}` (use this to identify the correct field names):**")
+                            st.json(dbg["raw"])
             else:
                 st.success(f"✅ Successfully synchronized {len(df)} market rates")
 
