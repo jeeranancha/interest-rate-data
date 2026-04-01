@@ -165,8 +165,8 @@ if fetch_btn:
             # Define API metadata mapping exactly as requested
             api_mappings = [
                 # (CURVE_NAME, TENOR, SOURCE, ID_OR_PATH)
-                ("THOR_OIS", "1D", "BOT", "/stat/v1/financial_markets/thor_rate/"),
-                ("THB_DISCOUNTING", "1D", "BOT", "/stat/v1/monetary_policy/policy_rate/"),
+                ("THOR_OIS", "1D", "BOT", "/bot/public/stat/v1/financial_markets/thor_rate/"),
+                ("THB_DISCOUNTING", "1D", "BOT", "/bot/public/stat/v1/monetary_policy/policy_rate/"),
                 ("USD_SOFR", "1D", "FRED", "SOFR"),
                 ("USD_DISCOUNTING", "1D", "FRED", "DFEDTARU"),
                 ("USD_DISCOUNTING", "1M", "FRED", "DGS1MO"),
