@@ -26,18 +26,25 @@ def extract_latest_bot_rate(json_data, selected_date_str):
     try:
         result = json_data.get('result', {})
         
-        # New format usually has 'data' directly in 'result'
+        # Handle nested data structure (e.g., {"value": 2.5})
         rate = result.get('data')
-        # Some endpoints use 'interest_rate' or 'policy_rate'
+        if isinstance(rate, dict):
+            rate = rate.get('value') or rate.get('rate') or rate.get('data')
+            
+        # Try getting other common keys if still None
         if rate is None:
-            rate = result.get('interest_rate') or result.get('policy_rate')
+            # Look for ANY numeric value in the result keys
+            for k, v in result.items():
+                if isinstance(v, (int, float)):
+                    rate = v
+                    break
             
         rate_date = result.get('effective_datetime') or result.get('timestamp') or selected_date_str
         
         if rate is not None:
-             return (rate_date[:10], float(rate)), None
+             return (str(rate_date)[:10], float(rate)), None
              
-        return None, "Rate not found in API response"
+        return None, f"No numeric rate found in result keys: {list(result.keys())}"
     except Exception as e:
         return None, f"Parse error: {str(e)}"
 
