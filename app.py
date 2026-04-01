@@ -3,6 +3,9 @@ import pandas as pd
 import requests
 from datetime import timedelta
 import datetime
+import time
+import base64
+import json
 
 st.set_page_config(page_title="Market-Interest rate extractor", page_icon="🏦", layout="wide")
 
@@ -18,70 +21,73 @@ st.sidebar.header("Data Selection")
 selected_date = st.sidebar.date_input("EFFECTIVE_DATE", datetime.date.today())
 fetch_btn = st.sidebar.button("Fetch Data", type="primary")
 
-# --- BOT PARSERS ---
-def parse_thor(result, fallback_date):
-    data_list = result.get("data", [])
-    if isinstance(data_list, list) and len(data_list) > 0:
-        rec = data_list[0]
-        rate = rec.get("rate")
-        date = rec.get("period") or fallback_date
-        if rate is not None:
-            return (date, float(rate))
-    return None
-
-def parse_policy_rate(result, fallback_date):
-    data = result.get("data", {})
-    if isinstance(data, dict):
-        rate = data.get("value") or data.get("rate")
-        date = data.get("effective_date") or fallback_date
-        if rate is not None:
-            return (date, float(rate))
-    return None
-
 # --- BOT FETCH ---
 def fetch_bot_data(client_id, path, target_date):
     base_url = "https://gateway.api.bot.or.th"
+    token = client_id if client_id.startswith("Bearer ") else f"Bearer {client_id}"
+    
+    # Extract Client ID for header from the Base64 token if it matches the pattern
+    final_client_id = client_id
+    try:
+        decoded = json.loads(base64.b64decode(client_id + "==").decode('utf-8'))
+        final_client_id = decoded.get('id', client_id)
+    except:
+        pass
 
     headers = {
-        "X-IBM-Client-Id": client_id,
-        "Authorization": f"Bearer {client_id}",
+        "X-IBM-Client-Id": final_client_id,
+        "Authorization": token,
         "accept": "application/json"
     }
 
+    # Iterate backwards up to 14 days to find the first valid data point
     for i in range(14):
         check_date = target_date - timedelta(days=i)
         check_date_str = check_date.strftime("%Y-%m-%d")
-
         url = f"{base_url}{path}?start_period={check_date_str}&end_period={check_date_str}"
 
         try:
             resp = requests.get(url, headers=headers, timeout=15)
-
             if resp.status_code == 401:
                 return Exception("Unauthorized (Check BOT Token)")
-
+            
             resp.raise_for_status()
-            json_data = resp.json()
-            result = json_data.get("result", {})
-
-            # 🔥 Route to correct parser
-            if "thor_rate" in path:
-                parsed = parse_thor(result, check_date_str)
-            elif "policy_rate" in path:
-                parsed = parse_policy_rate(result, check_date_str)
+            res_json = resp.json()
+            result_block = res_json.get("result", {})
+            
+            # --- SUPER PARSER ---
+            rate = None
+            
+            # Case 1: result['data'] is a list (like THOR/Interbank)
+            data_field = result_block.get("data")
+            if isinstance(data_field, list) and len(data_field) > 0:
+                # ⭐ KEY FIX: If Interbank path, filter for "O/N"
+                if "INTRBNK_TXN_RATE" in path:
+                    for rec in data_field:
+                        if rec.get("term") == "O/N":
+                            rate = rec.get("rate")
+                            break
+                else:
+                    rate = data_field[0].get("rate")
+            
+            # Case 2: result['data'] is a dict (like Policy Rate)
+            elif isinstance(data_field, dict):
+                rate = data_field.get("value") or data_field.get("rate")
+            # Case 3: data is just flat in result
             else:
-                parsed = None
+                rate = result_block.get("value") or result_block.get("rate")
 
-            if parsed:
-                return parsed
+            if rate is not None:
+                return (check_date_str, float(rate))
 
         except Exception:
             continue
 
-    return Exception("No BOT data found (14-day lookback)")
+    return Exception("No BOT data found")
 
 # --- FRED FETCH ---
 def fetch_fred_data(api_key, series_id, target_date):
+    time.sleep(0.6) # ⏱️ Slightly longer delay to avoid FRED 500 errors
     url = "https://api.stlouisfed.org/fred/series/observations"
     params = {
         "series_id": series_id,
@@ -89,21 +95,17 @@ def fetch_fred_data(api_key, series_id, target_date):
         "file_type": "json",
         "observation_end": target_date.strftime("%Y-%m-%d"),
         "sort_order": "desc",
-        "limit": 5
+        "limit": 10
     }
-
     try:
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
-        data = response.json()
-
-        for obs in data.get("observations", []):
+        observations = response.json().get("observations", [])
+        for obs in observations:
             val = obs.get("value")
             if val not in [".", None, ""]:
                 return (obs.get("date"), float(val))
-
         return Exception("No valid FRED data")
-
     except Exception as e:
         return Exception(f"FRED Error: {str(e)}")
 
@@ -113,7 +115,6 @@ if fetch_btn:
         st.warning("⚠️ Please provide API credentials.")
     else:
         with st.spinner("Fetching data..."):
-
             effective_date_str = selected_date.strftime("%Y-%m-%d")
 
             api_mappings = [
@@ -134,7 +135,6 @@ if fetch_btn:
             errors = []
 
             for curve, tenor, source, api_uid in api_mappings:
-
                 if source == "BOT":
                     res = fetch_bot_data(bot_client_id, api_uid, selected_date)
                 else:
