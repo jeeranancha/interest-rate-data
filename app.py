@@ -21,49 +21,23 @@ fetch_btn = st.sidebar.button("Fetch Data", type="primary")
 # --- HELPER FUNCTIONS ---
 def extract_latest_bot_rate(json_data, selected_date_str):
     """
-    Safely finds the latest period/rate entry on or before the selected date
-    for dynamic BOT API responses.
+    Directly extracts rate from the new BOT v2/v3 Response format
     """
     try:
-        # Standard BOT structure
-        records = json_data.get('result', {}).get('data', {}).get('data_detail', [])
+        result = json_data.get('result', {})
         
-        # If not standard, look for any lists recursively
-        if not records:
-            def find_list(d):
-                if isinstance(d, dict):
-                    for k, v in d.items():
-                        res = find_list(v)
-                        if res is not None: return res
-                elif isinstance(d, list):
-                    return d
-                return None
-            records = find_list(json_data) or []
+        # New format usually has 'data' directly in 'result'
+        rate = result.get('data')
+        # Some endpoints use 'interest_rate' or 'policy_rate'
+        if rate is None:
+            rate = result.get('interest_rate') or result.get('policy_rate')
             
-        if not records:
-            return None, "Structure error: No valid data array found in BOT response"
-            
-        valid_records = []
-        for r in records:
-            # Dynamic key guessing for period date
-            r_date = r.get('period') or r.get('date') or r.get('data_date') or r.get('effective_date')
-            # Dynamic key guessing for rate value
-            r_rate = r.get('rate') or r.get('value') or r.get('interest_rate') or r.get('policy_rate') or r.get('thor')
-            
-            if r_date and r_rate is not None:
-                # Keep records strictly less than or equal to requested date
-                if r_date <= selected_date_str:
-                    try:
-                        valid_records.append((r_date, float(r_rate)))
-                    except ValueError:
-                        pass
+        rate_date = result.get('effective_datetime') or result.get('timestamp') or selected_date_str
         
-        if not valid_records:
-            return None, "No historical data found in the 7-day lookback window."
-            
-        # Sort by date descending and get the most recent one
-        valid_records.sort(key=lambda x: x[0], reverse=True)
-        return valid_records[0], None
+        if rate is not None:
+             return (rate_date[:10], float(rate)), None
+             
+        return None, "Rate not found in API response"
     except Exception as e:
         return None, f"Parse error: {str(e)}"
 
@@ -78,6 +52,7 @@ def fetch_bot_data(client_id, path, target_date):
     
     headers = {
         "X-IBM-Client-Id": client_id,
+        "Authorization": f"Bearer {client_id}" if client_id.startswith("ey") else client_id,
         "accept": "application/json"
     }
     
@@ -208,6 +183,9 @@ if fetch_btn:
             
             # Construct DataFrame exactly matching required columns
             df = pd.DataFrame(results, columns=["CURVE_NAME", "TENOR", "RATE_VALUE", "EFFECTIVE_DATE", "VALUE_DATE"])
+            
+            # FORCE column types to avoid Streamlit/PyArrow casting errors (Mixing float and N/A)
+            df["RATE_VALUE"] = df["RATE_VALUE"].astype(str)
             
             # Output and Rendering
             if errors:
