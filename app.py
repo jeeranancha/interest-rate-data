@@ -4,15 +4,15 @@ import requests
 from datetime import timedelta
 import datetime
 
-st.set_page_config(page_title="Treasury Data Portal", page_icon="🏦", layout="wide")
+st.set_page_config(page_title="Market-Interest rate extractor", page_icon="🏦", layout="wide")
 
-st.title("🏦 Treasury Data Portal")
-st.markdown("Fetch interest rate data from Bank of Thailand (BOT) and St. Louis Fed (FRED) easily.")
+st.title("🏦 Market-Interest rate extractor")
+st.markdown("Automated synchronization via direct API integration with the official Bank of Thailand and St. Louis Fed portals.")
 
 # --- SIDEBAR INPUTS ---
 st.sidebar.header("API Credentials")
-bot_client_id = st.sidebar.text_input("BOT Client ID", type="password", help="Enter your Bank of Thailand X-IBM-Client-Id")
-fred_api_key = st.sidebar.text_input("FRED API Key", type="password", help="Enter your St. Louis Fed API Key")
+bot_client_id = st.sidebar.text_input("BOT API Token - Interest Rates", type="password", help="Enter your Bank of Thailand API Token")
+fred_api_key = st.sidebar.text_input("FRED API Token", type="password", help="Enter your St. Louis Fed API Key")
 
 st.sidebar.header("Data Selection")
 selected_date = st.sidebar.date_input("EFFECTIVE_DATE", datetime.date.today())
@@ -72,12 +72,13 @@ def fetch_bot_data(client_id, path, target_date):
     Fetches Bank of Thailand endpoint looking back up to 7 days
     """
     start_date = target_date - timedelta(days=7)
-    base_url = "https://apigw1.bot.or.th/bot/public"
+    # NEW BOT GATEWAY URL (as of BOT migration)
+    base_url = "https://gateway.api.bot.or.th"
     url = f"{base_url}{path}"
     
     headers = {
         "X-IBM-Client-Id": client_id,
-        "Accept": "application/json"
+        "accept": "application/json"
     }
     
     # Send both start and end dates formatted properly
