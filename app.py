@@ -71,19 +71,35 @@ def fetch_bot_data(token_input, api_info, target_date):
                 continue
                 
             rate = None
-            # Case 1: Interbank / List-based
+            logging.error(f"[DEBUG] {api_type} data_field sample: {str(data_field)[:500]}")
+
+            # Case 1: Interbank / List-based (THOR_OIS)
+            # BOT API may use 'term', 'tenor', or 'type' for the field name,
+            # and 'O/N', 'ON', or 'Overnight' for the overnight value.
             if api_type == "interbank" and isinstance(data_field, list):
+                ON_KEYS = ("term", "tenor", "type", "period")
+                ON_VALUES = {"O/N", "ON", "Overnight", "overnight", "o/n"}
+                RATE_KEYS = ("rate", "value", "avg_rate", "rate_value", "weighted_avg_rate")
                 for rec in data_field:
-                    if rec.get("term") == "O/N":
-                        rate = rec.get("rate")
-                        break
-            # Case 2: Policy / Dict-based
+                    term_val = next((rec.get(k) for k in ON_KEYS if rec.get(k) is not None), None)
+                    if str(term_val).strip() in ON_VALUES:
+                        rate = next((rec.get(k) for k in RATE_KEYS if rec.get(k) is not None), None)
+                        if rate is not None:
+                            break
+                # Fallback: if no O/N label found, try first record
+                if rate is None and data_field:
+                    RATE_KEYS = ("rate", "value", "avg_rate", "rate_value", "weighted_avg_rate")
+                    rate = next((data_field[0].get(k) for k in RATE_KEYS if data_field[0].get(k) is not None), None)
+
+            # Case 2: Policy / Dict-based (THB_DISCOUNTING)
             elif api_type == "policy":
+                POLICY_RATE_KEYS = ("value", "rate", "policy_rate_percent", "rate_value",
+                                    "mid", "policy_rate", "interestRate", "interest_rate")
                 if isinstance(data_field, dict):
-                    rate = data_field.get("value") or data_field.get("rate")
+                    rate = next((data_field.get(k) for k in POLICY_RATE_KEYS if data_field.get(k) is not None), None)
                 elif isinstance(data_field, list) and len(data_field) > 0:
-                    rate = data_field[0].get("value") or data_field[0].get("rate")
-            
+                    rate = next((data_field[0].get(k) for k in POLICY_RATE_KEYS if data_field[0].get(k) is not None), None)
+
             if rate is not None:
                 # Type conversion safety
                 try:
