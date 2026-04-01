@@ -124,7 +124,7 @@ def fetch_fred_data(api_key, series_id, target_date):
         response = requests.get(url, params=params, timeout=15)
         
         if response.status_code == 400 and "api_key" in response.text.lower():
-             return Exception("Unauthorized (Check FRED API Key)")
+             return Exception("Unauthorized (Check FRED API Token)")
              
         response.raise_for_status()
         data = response.json()
@@ -135,24 +135,24 @@ def fetch_fred_data(api_key, series_id, target_date):
             val = obs.get("value")
             val_date = obs.get("date")
             
-            # FRED sometimes returns '.' during bank holidays within continuous observation sets
-            # We will try expanding the limit sequentially if a '.' is hit
-            if val == "." or val is None:
-                params["limit"] = 5
+            # If value is missing or '.', extend search back (FRED limit=1 with sort DESC handles search)
+            if val == "." or val is None or val == "":
+                # Try expanding the query range slightly
+                params["limit"] = 10 
                 resp2 = requests.get(url, params=params, timeout=15)
                 resp2.raise_for_status()
                 obs2 = resp2.json().get("observations", [])
                 
                 for o in obs2:
-                    if o.get("value") not in [".", None]:
+                    if o.get("value") not in [".", None, ""]:
                         return (o.get("date"), float(o.get("value")))
-                return Exception("Missing internal data (Returns '.')")
+                return Exception("Data unavailable in the last 10 observations")
                 
             return (val_date, float(val))
             
-        return Exception("No data observations found")
+        return Exception(f"No series observations found for {series_id}")
     except requests.exceptions.RequestException as e:
-        return Exception(f"HTTP Error: {e}")
+        return Exception(f"Connection/HTTP Error: {e}")
 
 # --- MAIN EXECUTION LOGIC ---
 if fetch_btn:
@@ -165,8 +165,8 @@ if fetch_btn:
             # Define API metadata mapping exactly as requested
             api_mappings = [
                 # (CURVE_NAME, TENOR, SOURCE, ID_OR_PATH)
-                ("THOR_OIS", "1D", "BOT", "/bot/public/stat/v1/financial_markets/thor_rate/"),
-                ("THB_DISCOUNTING", "1D", "BOT", "/bot/public/stat/v1/monetary_policy/policy_rate/"),
+                ("THOR_OIS", "1D", "BOT", "/Stat-InterbankTransactionRate/v2/INTRBNK_TXN_RATE"),
+                ("THB_DISCOUNTING", "1D", "BOT", "/PolicyRate/v3/policy_rate"),
                 ("USD_SOFR", "1D", "FRED", "SOFR"),
                 ("USD_DISCOUNTING", "1D", "FRED", "DFEDTARU"),
                 ("USD_DISCOUNTING", "1M", "FRED", "DGS1MO"),
