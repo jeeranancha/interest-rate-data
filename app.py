@@ -117,7 +117,7 @@ if fetch_btn:
             effective_date_str = selected_date.strftime("%Y-%m-%d")
 
             api_mappings = [
-                ("THOR_OIS", "1D", "BOT", "/stat/v1/financial_markets/thor_rate"),
+                ("THOR_OIS", "1D", "BOT", "/Stat-InterbankTransactionRate/v2/INTRBNK_TXN_RATE"),
                 ("THB_DISCOUNTING", "1D", "BOT", "/PolicyRate/v3/policy_rate"),
                 ("USD_SOFR", "1D", "FRED", "SOFR"),
                 ("USD_DISCOUNTING", "1D", "FRED", "DFEDTARU"),
