@@ -86,9 +86,16 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
             # The actual records live inside data_field["data_detail"]
             # ---------------------------------------------------------------
             if api_type == "interbank":
-                ON_KEYS   = ("term", "tenor", "type", "period")
+                # Exact field names confirmed from raw API response:
+                #   term key  → "term_type_name_eng" (e.g. "O/N", "T/N", ...)
+                #   rate key  → "weighted_average_interest_rate"
+                # Many records return "" for rate — must be treated as missing.
+                ON_KEYS   = ("term_type_name_eng", "term_type_name_th",
+                             "term", "tenor", "type")
                 ON_VALUES = {"O/N", "ON", "Overnight", "overnight", "o/n"}
-                RATE_KEYS = ("rate", "value", "avg_rate", "rate_value", "weighted_avg_rate")
+                RATE_KEYS = ("weighted_average_interest_rate",
+                             "weighted_avg_rate", "avg_rate",
+                             "rate", "value", "rate_value")
 
                 # Unwrap the data_detail list if data_field is a dict
                 records = data_field
@@ -101,12 +108,14 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
                             continue
                         term_val = next((rec.get(k) for k in ON_KEYS if rec.get(k) is not None), None)
                         if str(term_val).strip() in ON_VALUES:
-                            rate = next((rec.get(k) for k in RATE_KEYS if rec.get(k) is not None), None)
+                            # Skip empty-string rates (API returns "" for missing data)
+                            rate = next(
+                                (rec.get(k) for k in RATE_KEYS
+                                 if rec.get(k) not in (None, "", "N/A")),
+                                None
+                            )
                             if rate is not None:
                                 break
-                    # Fallback: first record if no O/N match
-                    if rate is None and records:
-                        rate = next((records[0].get(k) for k in RATE_KEYS if isinstance(records[0], dict) and records[0].get(k) is not None), None)
 
             # ---------------------------------------------------------------
             # Case 2: Policy (THB_DISCOUNTING)
