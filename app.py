@@ -46,15 +46,29 @@ def fetch_bot_data(client_id, path, target_date):
     Fetches Bank of Thailand endpoint looking back up to 7 days
     """
     start_date = target_date - timedelta(days=7)
-    # NEW BOT GATEWAY URL (as of BOT migration)
+    
+    # NEW 2026 BOT GATEWAY URL
     base_url = "https://gateway.api.bot.or.th"
     url = f"{base_url}{path}"
     
+    # 2026 MIGRATION FIX:
+    # Most new BOT v2/v3 endpoints require the token as a Bearer.
+    token = client_id if client_id.startswith("Bearer ") else f"Bearer {client_id}"
+    
+    # Try to decode the 'id' from the Base64 token if possible
+    final_client_id = client_id
+    try:
+        import base64, json
+        decoded = json.loads(base64.b64decode(client_id + "==").decode('utf-8'))
+        final_client_id = decoded.get('id', client_id)
+    except:
+        pass
+
     headers = {
-        "X-IBM-Client-Id": client_id,
-        "Authorization": f"Bearer {client_id}" if client_id.startswith("ey") else client_id,
+        "X-IBM-Client-Id": final_client_id,
+        "Authorization": token,
         "accept": "application/json"
-    }
+    } 
     
     # Send both start and end dates formatted properly
     params = {
@@ -184,8 +198,8 @@ if fetch_btn:
             # Construct DataFrame exactly matching required columns
             df = pd.DataFrame(results, columns=["CURVE_NAME", "TENOR", "RATE_VALUE", "EFFECTIVE_DATE", "VALUE_DATE"])
             
-            # FORCE column types to avoid Streamlit/PyArrow casting errors (Mixing float and N/A)
-            df["RATE_VALUE"] = df["RATE_VALUE"].astype(str)
+            # FORCE all columns to strings to prevent 'pyarrow.lib.ArrowTypeError' crashes in Streamlit
+            df = df.astype(str)
             
             # Output and Rendering
             if errors:
