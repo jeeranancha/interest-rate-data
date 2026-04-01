@@ -80,31 +80,61 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
 
             rate = None
 
-            # Case 1: Interbank list (THOR_OIS)
-            if api_type == "interbank" and isinstance(data_field, list):
+            # ---------------------------------------------------------------
+            # Case 1: Interbank (THOR_OIS)
+            # Logs show: data_field = {"data_header": {...}, "data_detail": [...]}
+            # The actual records live inside data_field["data_detail"]
+            # ---------------------------------------------------------------
+            if api_type == "interbank":
                 ON_KEYS   = ("term", "tenor", "type", "period")
                 ON_VALUES = {"O/N", "ON", "Overnight", "overnight", "o/n"}
                 RATE_KEYS = ("rate", "value", "avg_rate", "rate_value", "weighted_avg_rate")
-                for rec in data_field:
-                    term_val = next((rec.get(k) for k in ON_KEYS if rec.get(k) is not None), None)
-                    if str(term_val).strip() in ON_VALUES:
-                        rate = next((rec.get(k) for k in RATE_KEYS if rec.get(k) is not None), None)
-                        if rate is not None:
-                            break
-                # Fallback: grab first record if no O/N row matched
-                if rate is None and data_field:
-                    rate = next((data_field[0].get(k) for k in RATE_KEYS if data_field[0].get(k) is not None), None)
 
-            # Case 2: Policy dict/list (THB_DISCOUNTING)
+                # Unwrap the data_detail list if data_field is a dict
+                records = data_field
+                if isinstance(data_field, dict):
+                    records = data_field.get("data_detail", data_field)
+
+                if isinstance(records, list):
+                    for rec in records:
+                        if not isinstance(rec, dict):
+                            continue
+                        term_val = next((rec.get(k) for k in ON_KEYS if rec.get(k) is not None), None)
+                        if str(term_val).strip() in ON_VALUES:
+                            rate = next((rec.get(k) for k in RATE_KEYS if rec.get(k) is not None), None)
+                            if rate is not None:
+                                break
+                    # Fallback: first record if no O/N match
+                    if rate is None and records:
+                        rate = next((records[0].get(k) for k in RATE_KEYS if isinstance(records[0], dict) and records[0].get(k) is not None), None)
+
+            # ---------------------------------------------------------------
+            # Case 2: Policy (THB_DISCOUNTING)
+            # Logs show: data_field = 1.68  (a raw number, not dict/list!)
+            # ---------------------------------------------------------------
             elif api_type == "policy":
                 POLICY_RATE_KEYS = (
                     "value", "rate", "policy_rate_percent", "rate_value",
                     "mid", "policy_rate", "interestRate", "interest_rate"
                 )
-                if isinstance(data_field, dict):
+                # Shape A: plain number (most common based on logs)
+                if isinstance(data_field, (int, float)):
+                    rate = data_field
+                elif isinstance(data_field, str):
+                    try:
+                        rate = float(data_field)
+                    except ValueError:
+                        rate = None
+                # Shape B: dict
+                elif isinstance(data_field, dict):
                     rate = next((data_field.get(k) for k in POLICY_RATE_KEYS if data_field.get(k) is not None), None)
+                # Shape C: list
                 elif isinstance(data_field, list) and data_field:
-                    rate = next((data_field[0].get(k) for k in POLICY_RATE_KEYS if data_field[0].get(k) is not None), None)
+                    first = data_field[0]
+                    if isinstance(first, dict):
+                        rate = next((first.get(k) for k in POLICY_RATE_KEYS if first.get(k) is not None), None)
+                    elif isinstance(first, (int, float)):
+                        rate = first
 
             if rate is not None:
                 try:
