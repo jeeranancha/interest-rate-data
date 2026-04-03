@@ -243,7 +243,7 @@ if fetch_btn:
                 results.append({
                     "CURVE_NAME": curve,
                     "TENOR": tenor,
-                    "RATE_VALUE": rate_val,
+                    "RATE_VALUE": f"{rate_val:.6f}" if isinstance(rate_val, (int, float)) else rate_val,
                     "EFFECTIVE_DATE": request_date.strftime("%Y-%m-%d"),
                     "VALUE_DATE": val_date,
                     "STALE_DAYS": stale_days
@@ -271,7 +271,7 @@ if fetch_btn:
             st.download_button(
                 label="📥 Download CSV", 
                 data=csv, 
-                file_name=f"rates_{request_date.strftime('%Y-%m-%d')}.csv",
+                file_name=f"mkt_ir_input_{request_date.strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
 
