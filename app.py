@@ -11,7 +11,6 @@ import logging
 MAX_LOOKBACK = 14
 st.set_page_config(page_title="Market-Interest rate extractor", page_icon="🏦", layout="wide")
 
-# Setup logging
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
 st.title("🏦 Market-Interest rate extractor")
@@ -19,21 +18,20 @@ st.markdown("Automated synchronization via direct API integration with BOT and F
 
 # --- SIDEBAR INPUTS ---
 st.sidebar.header("API Credentials")
-bot_token_input = st.sidebar.text_input("BOT API Token", type="password", help="The long eyJ... token from BOT portal")
+bot_token_input = st.sidebar.text_input("BOT API Token", type="password")
 fred_api_key = st.sidebar.text_input("FRED API Token", type="password")
 
 st.sidebar.header("Data Selection")
 selected_date = st.sidebar.date_input("EFFECTIVE_DATE", datetime.today().date())
 fetch_btn = st.sidebar.button("Fetch Data", type="primary")
 
-# --- BOT FETCH FUNCTION ---
+# --- BOT FETCH FUNCTION (ENHANCED) ---
 def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
     path = api_info["path"]
     api_type = api_info["type"]
     base_url = "https://gateway.api.bot.or.th"
     auth_header = token_input if token_input.startswith("Bearer ") else f"Bearer {token_input}"
 
-    # Auto-decode Client ID
     final_client_id = token_input
     try:
         decoded = json.loads(base64.b64decode(token_input + "==").decode('utf-8'))
@@ -41,79 +39,81 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
     except Exception: pass
 
     headers = {"X-IBM-Client-Id": final_client_id, "Authorization": auth_header, "accept": "application/json"}
+    
     last_raw_response = None
+    last_url = None
 
     for i in range(MAX_LOOKBACK):
         check_date = target_date - timedelta(days=i)
         check_date_str = check_date.strftime("%Y-%m-%d")
         url = f"{base_url}{path}?start_period={check_date_str}&end_period={check_date_str}"
+        last_url = url
 
         try:
             resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code in [401, 403]: return Exception("Authentication Failed: Check BOT Token.")
+            if debug_capture is not None:
+                debug_capture["last_url"] = url
+                debug_capture["status_code"] = resp.status_code
+            
+            if resp.status_code in [401, 403]: return Exception("Auth Failed (401/403)")
+            
             resp.raise_for_status()
             res_json = resp.json()
             last_raw_response = res_json
 
             result_block = res_json.get("result", {})
             data_field = result_block.get("data")
+            
             if not data_field: continue
 
             rate = None
             
-            # --- 1. Interbank (THOR / Call Rate) ---
+            # --- 1. Interbank (THOR/Call) ---
             if api_type == "interbank":
-                # ดักจับ Tenor 1 Day / Call / Overnight
-                ON_KEYS   = ("term_type_name_eng", "term_type_name_th", "term", "tenor", "type")
-                ON_VALUES = {"O/N", "ON", "Overnight", "overnight", "o/n", "call", "1d"}
-                RATE_KEYS = ("weighted_average_interest_rate", "weighted_avg_rate", "rate", "value")
-                
+                ON_VALUES = {"O/N", "ON", "Overnight", "o/n", "call", "1d"}
                 records = data_field.get("data_detail", data_field) if isinstance(data_field, dict) else data_field
                 if isinstance(records, list):
                     for rec in records:
-                        term_val = str(next((rec.get(k) for k in ON_KEYS if rec.get(k) is not None), "")).strip()
+                        term_val = str(next((rec.get(k) for k in ("term_type_name_eng", "tenor", "term") if rec.get(k) is not None), "")).strip()
                         if term_val.upper() in [v.upper() for v in ON_VALUES]:
-                            rate = next((rec.get(k) for k in RATE_KEYS if rec.get(k) not in (None, "", "N/A")), None)
+                            rate = next((rec.get(k) for k in ("weighted_average_interest_rate", "rate", "value") if rec.get(k) not in (None, "", "N/A")), None)
                             if rate is not None: break
 
-            # --- 2. Policy Rate ---
+            # --- 2. Policy Rate (FIXED) ---
             elif api_type == "policy":
-                if isinstance(data_field, (int, float)): rate = data_field
+                # แก้ไข: เพิ่มการรองรับข้อมูลที่เป็น String (เช่น "1.00" จากในภาพ)
+                if isinstance(data_field, (int, float)): 
+                    rate = data_field
+                elif isinstance(data_field, str):
+                    try: rate = float(data_field)
+                    except: rate = None
                 elif isinstance(data_field, dict):
                     rate = next((data_field.get(k) for k in ("value", "rate", "policy_rate_percent") if data_field.get(k) is not None), None)
 
-            # --- 3. Saving Rate (1D / Call Equivalent) ---
+            # --- 3. Saving Rate ---
             elif api_type == "saving":
-                # ค้นหาคำว่า "Saving" หรือ "Call" ในคำอธิบาย เพื่อแยกออกจาก Fixed Deposit
-                SAVING_KEYS = ("avg_saving_rate_percent", "average_saving_rate", "saving_rate", "value")
-                DESC_KEYS   = ("account_type_name_eng", "account_type_name_th", "description", "term")
-                
                 records = data_field.get("data_detail", [data_field]) if isinstance(data_field, dict) else data_field
                 if isinstance(records, list):
                     for rec in records:
                         if not isinstance(rec, dict): continue
-                        
-                        # ตรวจสอบว่า record นี้คือ Saving/Call หรือไม่
-                        desc = " ".join([str(rec.get(k, "")).lower() for k in DESC_KEYS])
-                        is_saving = "saving" in desc or "call" in desc or "1d" in desc
-                        
-                        # ดึงค่า rate (ถ้าเจอ Key ตรงๆ หรือเป็น record ที่เป็น saving)
-                        val = next((rec.get(k) for k in SAVING_KEYS if rec.get(k) not in (None, "", "N/A")), None)
-                        
-                        if is_saving or (val is not None):
-                            if val is not None:
-                                rate = val
-                                break
+                        desc = " ".join([str(rec.get(k, "")).lower() for k in ("account_type_name_eng", "description", "term")])
+                        is_target = any(x in desc for x in ["saving", "call", "1d"])
+                        val = next((rec.get(k) for k in ("avg_saving_rate_percent", "value", "rate") if rec.get(k) not in (None, "", "N/A")), None)
+                        if is_target and val is not None:
+                            rate = val
+                            break
 
             if rate is not None:
                 try: return (check_date_str, float(rate))
                 except: continue
 
-        except Exception: continue
+        except Exception as e:
+            if debug_capture is not None: debug_capture["error_msg"] = str(e)
+            continue
 
-    if debug_capture is not None and last_raw_response is not None:
+    if debug_capture is not None:
         debug_capture["raw"] = last_raw_response
-    return Exception(f"No valid data found in last {MAX_LOOKBACK} days")
+    return Exception(f"No valid data in last {MAX_LOOKBACK} days")
 
 # --- FRED FETCH FUNCTION ---
 def fetch_fred_data(api_key, series_id, target_date):
@@ -122,14 +122,13 @@ def fetch_fred_data(api_key, series_id, target_date):
     params = {"series_id": series_id, "api_key": api_key, "file_type": "json", "observation_end": target_date.strftime("%Y-%m-%d"), "sort_order": "desc", "limit": 10}
     try:
         response = requests.get(url, params=params, timeout=15)
-        response.raise_for_status()
         data = response.json()
         observations = data.get("observations", [])
         for obs in observations:
             val = obs.get("value")
             if val not in [".", None, ""]: return (obs.get("date"), float(val))
-        return Exception("No data found")
-    except: return Exception("FRED error")
+        return Exception("No data")
+    except: return Exception("Connection error")
 
 # --- MAIN EXECUTION ---
 if fetch_btn:
@@ -168,10 +167,13 @@ if fetch_btn:
 
             df = pd.DataFrame(results).sort_values(by=["CURVE_NAME", "TENOR"])
             if errors:
-                with st.expander("🔴 Error Details", expanded=True):
+                with st.expander("🔍 DETAILED ERROR LOG (For Analysis)", expanded=True):
                     for l, m, d in errors:
-                        st.error(f"{l}: {m}")
+                        st.error(f"❌ {l}: {m}")
+                        st.write(f"**Last Attempted URL:** `{d.get('last_url')}`")
+                        if d.get("status_code"): st.write(f"**HTTP Status:** `{d.get('status_code')}`")
                         if d.get("raw"): st.json(d["raw"])
+                        st.divider()
             
             st.success(f"✅ Synchronized {len(df)} market rates")
             st.dataframe(df, use_container_width=True)
