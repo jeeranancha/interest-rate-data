@@ -32,6 +32,7 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
     base_url = "https://gateway.api.bot.or.th"
     auth_header = token_input if token_input.startswith("Bearer ") else f"Bearer {token_input}"
 
+    # Auto-decode Client ID
     final_client_id = token_input
     try:
         decoded = json.loads(base64.b64decode(token_input + "==").decode('utf-8'))
@@ -39,9 +40,7 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
     except Exception: pass
 
     headers = {"X-IBM-Client-Id": final_client_id, "Authorization": auth_header, "accept": "application/json"}
-    
-    last_raw_response = None
-    last_url = None
+    last_raw_response, last_url = None, None
 
     for i in range(MAX_LOOKBACK):
         check_date = target_date - timedelta(days=i)
@@ -55,8 +54,8 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
                 debug_capture["last_url"] = url
                 debug_capture["status_code"] = resp.status_code
             
-            if resp.status_code == 404: continue # ลองวันที่ก่อนหน้าถ้า Path ผิดในบางวัน
             if resp.status_code in [401, 403]: return Exception("Auth Failed (401/403)")
+            if resp.status_code == 404: continue # ลองวันก่อนหน้าถ้า Path นี้ไม่มีข้อมูลในวันนั้น
             
             resp.raise_for_status()
             res_json = resp.json()
@@ -68,7 +67,7 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
 
             rate = None
             
-            # Case 1: Interbank
+            # --- 1. Interbank ---
             if api_type == "interbank":
                 records = data_field.get("data_detail", data_field) if isinstance(data_field, dict) else data_field
                 if isinstance(records, list):
@@ -78,25 +77,28 @@ def fetch_bot_data(token_input, api_info, target_date, debug_capture=None):
                             rate = rec.get("weighted_average_interest_rate")
                             if rate: break
 
-            # Case 2: Policy (FIXED)
+            # --- 2. Policy Rate ---
             elif api_type == "policy":
                 if isinstance(data_field, (int, float)): rate = data_field
                 elif isinstance(data_field, str): 
                     try: rate = float(data_field)
-                    except: rate = None
+                    except: pass
 
-            # Case 3: Saving (FIXED PATH)
+            # --- 3. Saving Rate (แก้ไขตามรูปที่ 5) ---
             elif api_type == "saving":
-                records = data_field.get("data_detail", []) if isinstance(data_field, dict) else data_field
-                if isinstance(records, list):
-                    for rec in records:
-                        # หาบรรทัดที่เป็น Saving Account
-                        acc_type = str(rec.get("account_type_name_eng", "")).lower()
-                        if "saving" in acc_type:
-                            val = rec.get("avg_saving_rate_percent") or rec.get("value")
-                            if val:
-                                rate = val
+                # สำหรับ /DepositRate/v2/avg_deposit_rate ข้อมูลมักอยู่ใน List
+                records = data_field if isinstance(data_field, list) else [data_field]
+                for rec in records:
+                    if not isinstance(rec, dict): continue
+                    # ค้นหาค่า saving (มักใช้ชื่อ avg_saving_rate_percent หรือที่มีคำว่า saving)
+                    rate = next((rec.get(k) for k in ("avg_saving_rate_percent", "saving_rate", "value") if rec.get(k) not in (None, "", "N/A")), None)
+                    if rate is None:
+                        # Fallback: ค้นหา Key ที่มีคำว่า 'saving'
+                        for k, v in rec.items():
+                            if "saving" in k.lower() and v not in (None, "", "N/A"):
+                                rate = v
                                 break
+                    if rate: break
 
             if rate is not None:
                 return (check_date_str, float(rate))
@@ -129,8 +131,8 @@ if fetch_btn:
             api_mappings = [
                 ("THOR_OIS", "1D", "BOT", {"path": "/Stat-InterbankTransactionRate/v2/INTRBNK_TXN_RATE", "type": "interbank"}),
                 ("THB_DISCOUNTING", "1D", "BOT", {"path": "/PolicyRate/v3/policy_rate", "type": "policy"}),
-                # แก้ไข PATH ที่นี่
-                ("THB_SAVING", "1D", "BOT", {"path": "/Stat-RetailInterestRate/v2/RETAIL_IR", "type": "saving"}),
+                # แก้ไข Path ตามรูปที่ 5: /DepositRate/v2/avg_deposit_rate
+                ("THB_SAVING", "1D", "BOT", {"path": "/DepositRate/v2/avg_deposit_rate", "type": "saving"}),
                 ("USD_SOFR", "1D", "FRED", "SOFR"),
                 ("USD_DISCOUNTING", "1D", "FRED", "DFEDTARU"),
                 ("USD_DISCOUNTING", "1M", "FRED", "DGS1MO"),
@@ -164,4 +166,6 @@ if fetch_btn:
             
             st.success(f"✅ Synced {len(df)} rates")
             st.dataframe(df, use_container_width=True)
-            st.download_button("📥 Download", df.to_csv(index=False), "mkt_ir.csv")
+            st.download_button("📥 Download", df.to_csv(index=False), f"mkt_ir_{request_date.strftime('%Y%m%d')}.csv", "text/csv")
+else:
+    st.info("👈 Enter tokens และกด Fetch Data")
