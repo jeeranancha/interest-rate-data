@@ -153,9 +153,9 @@ if fetch_btn:
                 else: v_date, r_val = res
 
                 stale = (request_date - datetime.strptime(v_date, "%Y-%m-%d").date()).days if v_date != "N/A" else "N/A"
-                results.append({"CURVE_NAME": curve, "TENOR": tenor, "RATE_VALUE": f"{r_val:.6f}" if isinstance(r_val, (int, float)) else r_val, "EFFECTIVE_DATE": request_date.strftime("%Y-%m-%d"), "VALUE_DATE": v_date, "STALE_DAYS": stale})
+                results.append({"curve_name": curve, "tenor": tenor, "rate_value": f"{r_val:.6f}" if isinstance(r_val, (int, float)) else r_val, "effective_date": request_date.strftime("%Y-%m-%d"), "value_date": v_date, "stale_days": stale})
 
-            df = pd.DataFrame(results).sort_values(by=["CURVE_NAME", "TENOR"])
+            df = pd.DataFrame(results).sort_values(by=["curve_name", "tenor"])
             if errors:
                 with st.expander("🔍 Detailed Error Logs"):
                     for l, m, d in errors:
